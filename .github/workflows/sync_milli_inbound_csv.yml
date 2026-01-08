@@ -1,0 +1,50 @@
+name: Sync milli inbound CSV (public Sheets)
+
+on:
+  schedule:
+    - cron: '0 20 * * *'   # 毎日 05:00 JST (= 20:00 UTC)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      INBOUND_ID: 1kTxDg3TwlfpcJLteZXHDxtyCD4rG_zCFG1AUa9auEb8
+      INBOUND_GID: "2095131599"
+      OUT_INBOUND: ./milliforinbound.csv
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch CSV file
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$OUT_INBOUND")"
+
+          fetch () {
+            id="$1"; gid="$2"; fmt="$3"; out="$4"; tmp="$(mktemp)"
+            url="https://docs.google.com/spreadsheets/d/${id}/export?format=${fmt}&gid=${gid}&_ts=$(date +%s)"
+            curl -fsSL --retry 5 --retry-delay 3 -H 'Cache-Control: no-cache' "$url" -o "$tmp"
+            head -c 512 "$tmp" | grep -qi "<html" && { echo "ERROR: got HTML instead of ${fmt}"; exit 1; }
+            mv "$tmp" "$out"
+            echo "Saved $out"
+          }
+
+          fetch "$INBOUND_ID" "$INBOUND_GID" "csv" "$OUT_INBOUND"
+
+      - name: Commit & push if changed
+        run: |
+          set -e
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "chore: daily sync inbound csv ($(date -u +'%Y-%m-%dT%H:%M:%SZ'))"
+            git push
+          fi
